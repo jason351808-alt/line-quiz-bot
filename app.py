@@ -433,8 +433,10 @@ def shuffle_question(q):
             new_options[label] = text
             if text in correct_texts:
                 new_answer_list.append(label)
-        new_answer = "".join(sorted(new_answer_list))
 
+import random
+random.shuffle(new_answer_list)
+new_answer = "".join(new_answer_list)
     return {
         "id": q["id"],
         "type": q["type"],
