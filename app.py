@@ -596,8 +596,8 @@ def handle_message(event):
     if msg.upper() in ["開始", "START", "開始測驗", "RESET", "重設", "重新開始"]:
         if msg.upper() in ["RESET", "重設", "重新開始"]:
             reset_user_progress(user_id)
-   if msg.upper() in ["停止", "STOP", "結束", "退出"]:
-    reset_user_progress(user_id)
+    if msg.upper() in ["停止", "STOP", "結束", "退出"]:
+            reset_user_progress(user_id)
 
     line_bot_api.reply_message(
         event.reply_token,
