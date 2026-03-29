@@ -593,17 +593,10 @@ def handle_message(event):
     user_id = event.source.user_id
     msg = event.message.text.strip()
 
+    # ===== 開始 =====
     if msg.upper() in ["開始", "START", "開始測驗", "RESET", "重設", "重新開始"]:
         if msg.upper() in ["RESET", "重設", "重新開始"]:
             reset_user_progress(user_id)
-    if msg.upper() in ["停止", "STOP", "結束", "退出"]:
-            reset_user_progress(user_id)
-
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="🛑 已停止測驗\n輸入「開始」可以重新開始")
-        )
-        return
 
         question_row = get_random_question(user_id)
         if not question_row:
@@ -627,13 +620,26 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, build_question_message(shuffled))
         return
 
+    # ===== 停止 =====
+    if msg.upper() in ["停止", "STOP", "結束", "退出"]:
+        reset_user_progress(user_id)
+
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="🛑 已停止測驗\n輸入「開始」可以重新開始")
+        )
+        return
+
+    # ===== 檢查是否在作答 =====
     progress = get_user_progress(user_id)
     if not progress or not progress.get("current_question_id"):
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="可輸入「開始」開始測驗，或輸入「重新開始」重置進度。")
+            TextSendMessage(text="請先輸入「開始」進行測驗")
         )
         return
+
+    # ===== 以下是原本答題邏輯 =====
 
     is_correct = check_answer(msg, progress["current_answer"], progress["question_type"])
     score = int(progress.get("score") or 0)
