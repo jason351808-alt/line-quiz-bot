@@ -451,7 +451,7 @@ def format_question_text(shuffled_q):
     text = f"📚 {'多選題' if shuffled_q['type'] == 'multi' else '單選題'}\n{shuffled_q['question']}\n\n"
     for k, v in shuffled_q["options"].items():
         num = ord(k) - 64
-        text += f"{k}. {v}（{num}）\n"
+        text += f"{i+1}. {v}\n"
 
     if shuffled_q["type"] == "multi":
         text += "\n請輸入答案，例如：AB、12、A,C"
