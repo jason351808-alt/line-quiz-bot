@@ -334,12 +334,20 @@ def callback():
     signature = request.headers.get("X-Line-Signature", "")
     body = request.get_data(as_text=True)
 
+    print("=== CALLBACK START ===")
+    print("SIGNATURE:", signature)
+    print("BODY:", body)
+
     try:
         handler.handle(body, signature)
-    except InvalidSignatureError:
+        print("=== CALLBACK OK ===")
+    except InvalidSignatureError as e:
+        print("InvalidSignatureError:", e)
         abort(400)
     except Exception as e:
+        import traceback
         print("Webhook error:", e)
+        traceback.print_exc()
         abort(500)
 
     return "OK"
