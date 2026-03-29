@@ -603,7 +603,7 @@ def handle_message(event):
         event.reply_token,
         TextSendMessage(text="🛑 已停止測驗\n輸入「開始」可以重新開始")
     )
-    return
+        return
 
         question_row = get_random_question(user_id)
         if not question_row:
