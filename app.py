@@ -599,11 +599,11 @@ def handle_message(event):
     if msg.upper() in ["停止", "STOP", "結束", "退出"]:
             reset_user_progress(user_id)
 
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text="🛑 已停止測驗\n輸入「開始」可以重新開始")
-    )
-    return
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="🛑 已停止測驗\n輸入「開始」可以重新開始")
+        )
+        return
 
         question_row = get_random_question(user_id)
         if not question_row:
