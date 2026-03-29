@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>匯入題庫</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<div class="container py-5">
+<div class="d-flex justify-content-between align-items-center mb-4">
+<h2>Excel 匯入題庫</h2>
+<div><a href="/download-template" class="btn btn-success">下載範本</a> <a href="/dashboard" class="btn btn-secondary">返回後台</a></div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+{% for category, message in messages %}
+<div class="alert alert-{{ 'warning' if category == 'warning' else category }}">{{ message }}</div>
+{% endfor %}
+{% endif %}
+{% endwith %}
+
+<div class="card shadow-sm"><div class="card-body">
+<form method="post" enctype="multipart/form-data">
+<div class="mb-3"><label class="form-label">選擇 Excel 檔案</label><input type="file" name="file" class="form-control" accept=".xlsx,.xls" required></div>
+<div class="mb-3"><label class="form-label">匯入模式</label>
+<select name="mode" class="form-select">
+<option value="upsert">更新題庫（同題目就更新，沒有就新增）</option>
+<option value="replace_all">覆蓋全部題庫（先清空再匯入）</option>
+</select></div>
+<button type="submit" class="btn btn-primary">開始匯入</button>
+</form>
+</div></div>
+
+<div class="card mt-4 shadow-sm"><div class="card-body">
+<h5>Excel 欄位格式</h5>
+<table class="table table-bordered">
+<thead><tr><th>category</th><th>question</th><th>option_a</th><th>option_b</th><th>option_c</th><th>option_d</th><th>option_e</th><th>option_f</th><th>option_g</th><th>option_h</th><th>answer</th><th>type</th></tr></thead>
+<tbody>
+<tr><td>常識</td><td>台灣首都是哪裡？</td><td>台北</td><td>高雄</td><td>台中</td><td>台南</td><td></td><td></td><td></td><td></td><td>A</td><td>single</td></tr>
+<tr><td>數學</td><td>哪些是偶數？</td><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td><td>6</td><td></td><td></td><td>BDF 或 246</td><td>multi</td></tr>
+<tr><td>常識</td><td>地球是圓的。</td><td>是</td><td>否</td><td></td><td></td><td></td><td></td><td></td><td></td><td>A</td><td>tf</td></tr>
+</tbody>
+</table>
+<p class="mb-0">type 只能填：single、multi、tf；答案可填 A~H 或 1~8。</p>
+</div></div>
+</div>
+</body></html>
