@@ -445,7 +445,7 @@ def format_question_text(shuffled_q):
     text = f"📚 {'多選題' if shuffled_q['type'] == 'multi' else '單選題'}\n{shuffled_q['question']}\n\n"
 
     for k, v in shuffled_q["options"].items():
-       def shuffle_question(q):
+def shuffle_question(q):
     if q["type"] == "tf":
         return {
             "id": q["id"],
