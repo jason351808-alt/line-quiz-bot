@@ -442,7 +442,7 @@ def format_question_text(shuffled_q):
     if shuffled_q["type"] == "tf":
         return f"📚 是非題\n{shuffled_q['question']}\n\nO. 是\nX. 否\n\n請輸入 O / X，或 是 / 否"
 
-        text = f"📚 {'多選題' if shuffled_q['type'] == 'multi' else '單選題'}\n{shuffled_q['question']}\n\n"
+    text = f"📚 {'多選題' if shuffled_q['type'] == 'multi' else '單選題'}\n{shuffled_q['question']}\n\n"
 
     for k, v in shuffled_q["options"].items():
         num = ord(k) - 64
