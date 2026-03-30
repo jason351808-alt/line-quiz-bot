@@ -445,6 +445,15 @@ def format_question_text(shuffled_q):
     text = f"📚 {'多選題' if shuffled_q['type'] == 'multi' else '單選題'}\n{shuffled_q['question']}\n\n"
 
     for k, v in shuffled_q["options"].items():
+        num = ord(k) - 64
+        text += f"{num}. {v}\n"
+
+    if shuffled_q["type"] == "multi":
+        text += "\n請輸入答案，例如：13、1,3、24"
+    else:
+        text += "\n請輸入答案，例如：1"
+
+    return text
 def shuffle_question(q):
     if q["type"] == "tf":
         return {
