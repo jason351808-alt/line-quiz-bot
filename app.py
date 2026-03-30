@@ -435,7 +435,17 @@ def check_answer(user_input, correct_answer, q_type):
     return normalize_answer(user_input, q_type) == normalize_answer(correct_answer, q_type)
 
 
-def shuffle_question(q):
+
+
+
+def format_question_text(shuffled_q):
+    if shuffled_q["type"] == "tf":
+        return f"📚 是非題\n{shuffled_q['question']}\n\nO. 是\nX. 否\n\n請輸入 O / X，或 是 / 否"
+
+    text = f"📚 {'多選題' if shuffled_q['type'] == 'multi' else '單選題'}\n{shuffled_q['question']}\n\n"
+
+    for k, v in shuffled_q["options"].items():
+       def shuffle_question(q):
     if q["type"] == "tf":
         return {
             "id": q["id"],
@@ -452,35 +462,20 @@ def shuffle_question(q):
         ("G", q.get("option_g")), ("H", q.get("option_h"))
     ]
     options = [(k, v) for k, v in options if v]
-    original_map = dict(options)
+
+    # 選項固定，不打亂
+    new_options = {k: v for k, v in options}
+
+    answer = str(q["answer"]).strip().upper()
 
     if q["type"] == "single":
-        correct_text = original_map[q["answer"]]
+        new_answer = answer
     else:
-        correct_texts = [original_map[c] for c in q["answer"] if c in original_map]
+        # 只打亂答案順序，不打亂選項
+        new_answer_list = [c for c in answer if c in new_options]
+        random.shuffle(new_answer_list)
+        new_answer = "".join(new_answer_list)
 
-    random.shuffle(options)
-    labels = [x[0] for x in options]
-    new_options = {}
-
-    if q["type"] == "single":
-        new_answer = None
-        for i, (_, text) in enumerate(options):
-            label = labels[i]
-            new_options[label] = text
-            if text == correct_text:
-                new_answer = label
-    else:
-        new_answer_list = []
-        for i, (_, text) in enumerate(options):
-            label = labels[i]
-            new_options[label] = text
-            if text in correct_texts:
-                new_answer_list.append(label)
-
-import random
-random.shuffle(new_answer_list)
-new_answer = "".join(new_answer_list)
     return {
         "id": q["id"],
         "type": q["type"],
@@ -488,16 +483,7 @@ new_answer = "".join(new_answer_list)
         "options": new_options,
         "answer": new_answer
     }
-
-
-def format_question_text(shuffled_q):
-    if shuffled_q["type"] == "tf":
-        return f"📚 是非題\n{shuffled_q['question']}\n\nO. 是\nX. 否\n\n請輸入 O / X，或 是 / 否"
-
-    text = f"📚 {'多選題' if shuffled_q['type'] == 'multi' else '單選題'}\n{shuffled_q['question']}\n\n"
-
-    for k, v in shuffled_q["options"].items():
-        num = ord(k) - 64
+    num = ord(k) - 64
         text += f"{num}. {v}\n"
 
     if shuffled_q["type"] == "multi":
