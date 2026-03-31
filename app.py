@@ -37,33 +37,163 @@ def get_db():
     return mysql.connector.connect(**db_config)
 
 
-def get_system_setting(key: str) -> str:
+def init_app_tables():
     conn = get_db()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor()
     try:
-        cursor.execute("SELECT setting_value FROM system_settings WHERE setting_key=%s", (key,))
-        row = cursor.fetchone()
-        return row["setting_value"] if row else ""
-    except mysql.connector.Error:
-        return ""
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_settings (
+                setting_key VARCHAR(100) PRIMARY KEY,
+                setting_value TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS quiz_groups (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                group_name VARCHAR(100) NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS quiz_group_categories (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                quiz_group_id INT NOT NULL,
+                category_name VARCHAR(100) NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_group_selection (
+                user_id VARCHAR(100) PRIMARY KEY,
+                quiz_group_id INT NULL,
+                is_selecting_group TINYINT(1) NOT NULL DEFAULT 0
+            )
+        """)
+        conn.commit()
     finally:
         cursor.close()
         conn.close()
 
 
-def set_system_setting(key: str, value: str) -> None:
+def get_all_groups():
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT * FROM quiz_groups ORDER BY id ASC")
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def create_quiz_group(group_name):
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            """
-            INSERT INTO system_settings (setting_key, setting_value)
-            VALUES (%s, %s)
-            ON DUPLICATE KEY UPDATE setting_value=%s
-            """,
-            (key, value, value),
-        )
+        cursor.execute("INSERT INTO quiz_groups (group_name) VALUES (%s)", (group_name,))
         conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def delete_quiz_group(group_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM quiz_group_categories WHERE quiz_group_id=%s", (group_id,))
+        cursor.execute("DELETE FROM user_group_selection WHERE quiz_group_id=%s", (group_id,))
+        cursor.execute("DELETE FROM quiz_groups WHERE id=%s", (group_id,))
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_group_categories(group_id):
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT category_name FROM quiz_group_categories WHERE quiz_group_id=%s ORDER BY id ASC",
+            (group_id,),
+        )
+        rows = cursor.fetchall()
+        return [r["category_name"] for r in rows]
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_group_categories_map():
+    groups = get_all_groups()
+    return {g["id"]: get_group_categories(g["id"]) for g in groups}
+
+
+def set_group_categories(group_id, categories):
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM quiz_group_categories WHERE quiz_group_id=%s", (group_id,))
+        for category_name in categories:
+            cursor.execute(
+                "INSERT INTO quiz_group_categories (quiz_group_id, category_name) VALUES (%s, %s)",
+                (group_id, category_name),
+            )
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_user_group_selection(user_id):
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT * FROM user_group_selection WHERE user_id=%s", (user_id,))
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def set_user_group_selection(user_id, quiz_group_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO user_group_selection (user_id, quiz_group_id, is_selecting_group)
+            VALUES (%s, %s, 0)
+            ON DUPLICATE KEY UPDATE quiz_group_id=%s, is_selecting_group=0
+        """, (user_id, quiz_group_id, quiz_group_id))
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def set_user_selecting_group(user_id, is_selecting):
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO user_group_selection (user_id, quiz_group_id, is_selecting_group)
+            VALUES (%s, NULL, %s)
+            ON DUPLICATE KEY UPDATE is_selecting_group=%s
+        """, (user_id, is_selecting, is_selecting))
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_user_selected_group(user_id):
+    selection = get_user_group_selection(user_id)
+    if not selection or not selection.get("quiz_group_id"):
+        return None
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT * FROM quiz_groups WHERE id=%s", (selection["quiz_group_id"],))
+        return cursor.fetchone()
     finally:
         cursor.close()
         conn.close()
@@ -140,8 +270,8 @@ def dashboard():
     cursor.close()
     conn.close()
 
-    active_categories_raw = get_system_setting("active_categories")
-    active_categories = [x for x in active_categories_raw.split(",") if x]
+    groups = get_all_groups()
+    group_categories_map = get_group_categories_map()
 
     return render_template(
         "dashboard.html",
@@ -150,23 +280,48 @@ def dashboard():
         keyword=keyword,
         category=category,
         qtype=qtype,
-        active_categories=active_categories,
+        groups=groups,
+        group_categories_map=group_categories_map,
     )
 
 
-@app.route("/set-categories", methods=["POST"])
-def set_categories():
+@app.route("/groups/add", methods=["POST"])
+def add_group():
     if not session.get("login"):
         return redirect("/")
 
-    selected_categories = request.form.getlist("active_categories")
-    value = ",".join(selected_categories)
-    set_system_setting("active_categories", value)
+    group_name = request.form.get("group_name", "").strip()
+    if not group_name:
+        flash("請輸入組別名稱", "danger")
+        return redirect("/dashboard")
+
+    create_quiz_group(group_name)
+    flash(f"已新增組別：{group_name}", "success")
+    return redirect("/dashboard")
+
+
+@app.route("/groups/delete/<int:group_id>", methods=["POST"])
+def remove_group(group_id):
+    if not session.get("login"):
+        return redirect("/")
+
+    delete_quiz_group(group_id)
+    flash("組別已刪除", "success")
+    return redirect("/dashboard")
+
+
+@app.route("/groups/set-categories/<int:group_id>", methods=["POST"])
+def update_group_categories(group_id):
+    if not session.get("login"):
+        return redirect("/")
+
+    selected_categories = request.form.getlist(f"group_categories_{group_id}")
+    set_group_categories(group_id, selected_categories)
 
     if selected_categories:
-        flash("目前出題科目已設定為：" + "、".join(selected_categories), "success")
+        flash("已設定組別題庫範圍：" + "、".join(selected_categories), "success")
     else:
-        flash("目前出題科目已設定為：全部科目", "success")
+        flash("此組別未勾選科目，將視為全部科目", "warning")
 
     return redirect("/dashboard")
 
@@ -579,8 +734,8 @@ def get_random_question(user_id):
     if progress and progress.get("answered_questions"):
         excluded = [x for x in progress["answered_questions"].split(",") if x]
 
-    active_categories_raw = get_system_setting("active_categories")
-    active_categories = [x for x in active_categories_raw.split(",") if x]
+    selected_group = get_user_selected_group(user_id)
+    group_categories = get_group_categories(selected_group["id"]) if selected_group else []
 
     conn = get_db()
     cursor = conn.cursor(dictionary=True)
@@ -588,10 +743,10 @@ def get_random_question(user_id):
     sql = "SELECT * FROM questions WHERE 1=1"
     params = []
 
-    if active_categories:
-        placeholders = ",".join(["%s"] * len(active_categories))
+    if group_categories:
+        placeholders = ",".join(["%s"] * len(group_categories))
         sql += f" AND category IN ({placeholders})"
-        params.extend(active_categories)
+        params.extend(group_categories)
 
     if excluded:
         placeholders = ",".join(["%s"] * len(excluded))
@@ -620,6 +775,54 @@ def log_answer(user_id, question_id, user_answer, correct_answer, is_correct):
     conn.commit()
     cursor.close()
     conn.close()
+
+
+def get_wrong_questions(user_id):
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT DISTINCT q.*
+            FROM answer_logs a
+            JOIN questions q ON a.question_id = q.id
+            WHERE a.user_id=%s AND a.is_correct=0
+            ORDER BY q.id DESC
+            """,
+            (user_id,),
+        )
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def clear_wrong_questions(user_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM answer_logs WHERE user_id=%s AND is_correct=0", (user_id,))
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def build_wrong_book_text(user_id):
+    wrong_questions = get_wrong_questions(user_id)
+    if not wrong_questions:
+        return "你的錯題本目前是空的。"
+
+    lines = ["📘 錯題本（最多顯示10題）"]
+    for idx, q in enumerate(wrong_questions[:10], start=1):
+        answer_display = format_answer_display(q.get("answer", ""), q.get("type", "single"))
+        lines.append(f"\n{idx}. {q.get('question', '')}")
+        lines.append(f"正確答案：{answer_display}")
+
+    if len(wrong_questions) > 10:
+        lines.append(f"\n...還有 {len(wrong_questions) - 10} 題未顯示")
+
+    return "\n".join(lines)
 
 
 def reset_user_progress(user_id):
@@ -661,17 +864,99 @@ def format_answer_display(answer, qtype):
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_id = event.source.user_id
-    msg = event.message.text.strip()
+    raw_msg = event.message.text or ""
+    msg = raw_msg.strip()
+    normalized_msg = msg.replace("　", " ")
+    compact_msg = normalized_msg.replace(" ", "")
+
+    if compact_msg in ["錯題本", "查看錯題本"] or ("錯題本" in compact_msg and all(x not in compact_msg for x in ["清空", "重設"])):
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=build_wrong_book_text(user_id)),
+        )
+        return
+
+    if compact_msg in ["清空錯題本", "重設錯題本", "刪除錯題本"] or (("錯題本" in compact_msg) and ("清空" in compact_msg or "重設" in compact_msg or "刪除" in compact_msg)):
+        clear_wrong_questions(user_id)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="🧹 已清空錯題本"),
+        )
+        return
+
+    if msg == "選組":
+        groups = get_all_groups()
+        if not groups:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="目前尚未建立任何組別，請先請管理員到後台新增組別。"),
+            )
+            return
+
+        set_user_selecting_group(user_id, 1)
+        lines = ["請選擇組別："]
+        for idx, g in enumerate(groups, start=1):
+            lines.append(f"{idx}. {g['group_name']}")
+        lines.append("")
+        lines.append("請直接輸入數字，例如：1")
+
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="\n".join(lines)),
+        )
+        return
+
+    if msg == "目前組別":
+        selected_group = get_user_selected_group(user_id)
+        if not selected_group:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="你目前尚未選擇組別，請先輸入「選組」。"),
+            )
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"你目前的組別是：{selected_group['group_name']}"),
+            )
+        return
+
+    selection = get_user_group_selection(user_id)
+    if selection and int(selection.get("is_selecting_group") or 0) == 1 and msg.isdigit():
+        groups = get_all_groups()
+        idx = int(msg) - 1
+
+        if 0 <= idx < len(groups):
+            chosen_group = groups[idx]
+            set_user_group_selection(user_id, chosen_group["id"])
+            reset_user_progress(user_id)
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"你已選擇組別：{chosen_group['group_name']}\n輸入「開始」即可作答。"),
+            )
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="組別編號不存在，請重新輸入。"),
+            )
+        return
 
     if msg.upper() in ["開始", "START", "開始測驗", "RESET", "重設", "重新開始"]:
-        if msg.upper() in ["RESET", "重設", "重新開始"]:
+        selected_group = get_user_selected_group(user_id)
+        if not selected_group:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="請先輸入「選組」選擇你的組別。"),
+            )
+            return
+
+        if normalized_msg.upper() in ["RESET", "重設", "重新開始"]:
             reset_user_progress(user_id)
 
         question_row = get_random_question(user_id)
         if not question_row:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="目前題庫沒有題目。"),
+                TextSendMessage(text="目前這個組別沒有可出的題目。"),
             )
             return
 
@@ -692,7 +977,7 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, build_question_message(shuffled))
         return
 
-    if msg.upper() in ["停止", "STOP", "結束", "退出"]:
+    if normalized_msg.upper() in ["停止", "STOP", "結束", "退出"]:
         reset_user_progress(user_id)
         line_bot_api.reply_message(
             event.reply_token,
@@ -704,7 +989,7 @@ def handle_message(event):
     if not progress or not progress.get("current_question_id"):
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="請先輸入「開始」進行測驗"),
+            TextSendMessage(text="請先輸入「選組」，再輸入「開始」進行測驗。"),
         )
         return
 
@@ -761,6 +1046,8 @@ def handle_message(event):
             TextSendMessage(text=f"{result_text}\n\n🎉 題庫完成！\n\n輸入「重新開始」可再次測驗。"),
         )
 
+
+init_app_tables()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
