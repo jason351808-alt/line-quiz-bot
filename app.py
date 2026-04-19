@@ -1,4 +1,5 @@
 import os
+import json
 import random
 import mysql.connector
 import pandas as pd
@@ -98,6 +99,13 @@ def init_app_tables():
                 user_id VARCHAR(100) PRIMARY KEY,
                 quiz_group_id INT NULL,
                 is_selecting_group TINYINT(1) NOT NULL DEFAULT 0
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_mock_exam_sessions (
+                user_id VARCHAR(100) PRIMARY KEY,
+                exam_data LONGTEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
         """)
         conn.commit()
@@ -603,6 +611,30 @@ def import_excel():
     return render_template("import.html")
 
 
+@app.route("/bulk-delete", methods=["POST"])
+def bulk_delete_questions():
+    if not session.get("login"):
+        return redirect("/")
+
+    ids = request.form.getlist("question_ids")
+    if not ids:
+        flash("請先勾選要刪除的題目", "warning")
+        return redirect("/dashboard")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        placeholders = ",".join(["%s"] * len(ids))
+        cursor.execute(f"DELETE FROM questions WHERE id IN ({placeholders})", tuple(ids))
+        conn.commit()
+        flash(f"已批量刪除 {len(ids)} 題", "success")
+    finally:
+        cursor.close()
+        conn.close()
+
+    return redirect("/dashboard")
+
+
 @app.route("/download-template")
 def download_template():
     if not session.get("login"):
@@ -797,6 +829,201 @@ def get_random_question(user_id):
     return row
 
 
+MOCK_EXAM_CONFIG = {
+    "tf": {"count": 10, "points": 2, "label": "是非題"},
+    "single": {"count": 10, "points": 2, "label": "單選題"},
+    "multi": {"count": 20, "points": 3, "label": "多選題"},
+}
+
+
+def get_mock_exam_session(user_id):
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT exam_data FROM user_mock_exam_sessions WHERE user_id=%s", (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row["exam_data"])
+        except Exception:
+            return None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def save_mock_exam_session(user_id, exam_data):
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO user_mock_exam_sessions (user_id, exam_data)
+            VALUES (%s, %s)
+            ON DUPLICATE KEY UPDATE exam_data=%s
+            """,
+            (user_id, json.dumps(exam_data, ensure_ascii=False), json.dumps(exam_data, ensure_ascii=False)),
+        )
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def clear_mock_exam_session(user_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM user_mock_exam_sessions WHERE user_id=%s", (user_id,))
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_random_questions_by_type(user_id, q_type, limit_count):
+    selected_group = get_user_selected_group(user_id)
+    group_categories = get_group_categories(selected_group["id"]) if selected_group else []
+
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        sql = "SELECT * FROM questions WHERE type=%s"
+        params = [q_type]
+
+        if group_categories:
+            placeholders = ",".join(["%s"] * len(group_categories))
+            sql += f" AND category IN ({placeholders})"
+            params.extend(group_categories)
+
+        sql += " ORDER BY RAND() LIMIT %s"
+        params.append(limit_count)
+        cursor.execute(sql, tuple(params))
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def build_mock_exam_plan(user_id):
+    questions = []
+    for q_type in ["tf", "single", "multi"]:
+        cfg = MOCK_EXAM_CONFIG[q_type]
+        picked = get_random_questions_by_type(user_id, q_type, cfg["count"])
+        if len(picked) < cfg["count"]:
+            return None, f"{cfg['label']} 題庫不足，目前只有 {len(picked)} 題，無法開始模擬考。"
+
+        for row in picked:
+            shuffled = shuffle_question(row)
+            questions.append({
+                "question_id": row["id"],
+                "question_type": row["type"],
+                "question_text": shuffled["question"],
+                "options": shuffled["options"],
+                "correct_answer": shuffled["answer"],
+                "points": cfg["points"],
+                "user_answer": "",
+                "is_correct": None,
+            })
+
+    return {
+        "mode": "mock_exam",
+        "reveal_mode": "final_only",
+        "current_index": 0,
+        "score": 0,
+        "answered": 0,
+        "questions": questions,
+    }, None
+
+
+def build_mock_exam_question_message(exam_data):
+    idx = exam_data["current_index"]
+    total = len(exam_data["questions"])
+    q = exam_data["questions"][idx]
+    header = f"📝 模擬考（第 {idx + 1}/{total} 題，{q['points']} 分）\n"
+
+    message = build_question_message({
+        "id": q["question_id"],
+        "type": q["question_type"],
+        "question": header + q["question_text"],
+        "options": q["options"],
+        "answer": q["correct_answer"],
+    })
+    return message
+
+
+def finish_mock_exam(user_id, exam_data, reply_token):
+    total_score = exam_data.get("score", 0)
+    total_questions = len(exam_data.get("questions", []))
+    clear_mock_exam_session(user_id)
+    line_bot_api.reply_message(
+        reply_token,
+        TextSendMessage(
+            text=(
+                "🎓 模擬考結束！\n"
+                f"總題數：{total_questions} 題\n"
+                f"總分：{total_score} / 100 分\n\n"
+                "配分：是非 10 題×2 分、單選 10 題×2 分、多選 20 題×3 分"
+            )
+        ),
+    )
+
+
+def handle_mock_exam_message(event, user_id, msg, exam_data):
+    if msg in ["結束模擬考", "停止模擬考", "取消模擬考"]:
+        clear_mock_exam_session(user_id)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="🛑 已結束模擬考模式"),
+        )
+        return True
+
+    idx = exam_data["current_index"]
+    current = exam_data["questions"][idx]
+    is_correct = check_answer(msg, current["correct_answer"], current["question_type"])
+
+    if is_correct:
+        exam_data["score"] += current["points"]
+
+    exam_data["answered"] += 1
+    exam_data["current_index"] += 1
+
+    log_answer(
+        user_id=user_id,
+        question_id=current["question_id"],
+        user_answer=normalize_answer(msg, current["question_type"]),
+        correct_answer=current["correct_answer"],
+        is_correct=is_correct,
+    )
+
+    result_text = "✅ 答對了！" if is_correct else f"❌ 答錯了！正確答案是：{format_answer_display(current['correct_answer'], current['question_type'])}"
+
+    if exam_data["current_index"] >= len(exam_data["questions"]):
+        total_score = exam_data.get("score", 0)
+        clear_mock_exam_session(user_id)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                text=(
+                    f"{result_text}\n\n"
+                    "🎓 模擬考結束！\n"
+                    f"總分：{total_score} / 100 分\n"
+                    f"作答題數：{exam_data['answered']} / {len(exam_data['questions'])} 題\n\n"
+                    "配分：是非 10 題×2 分、單選 10 題×2 分、多選 20 題×3 分"
+                )
+            ),
+        )
+        return True
+
+    save_mock_exam_session(user_id, exam_data)
+    line_bot_api.reply_message(
+        event.reply_token,
+        [TextSendMessage(text=result_text), build_mock_exam_question_message(exam_data)],
+    )
+    return True
+
+
 def log_answer(user_id, question_id, user_answer, correct_answer, is_correct):
     conn = get_db()
     cursor = conn.cursor()
@@ -967,6 +1194,39 @@ def handle_message(event):
                 TextSendMessage(text="組別編號不存在，請重新輸入。"),
             )
         return
+
+    if msg == "模擬考":
+        selected_group = get_user_selected_group(user_id)
+        if not selected_group:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="請先輸入「選組」選擇你的組別。"),
+            )
+            return
+
+        reset_user_progress(user_id)
+        exam_data, error_message = build_mock_exam_plan(user_id)
+        if error_message:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=error_message),
+            )
+            return
+
+        save_mock_exam_session(user_id, exam_data)
+        line_bot_api.reply_message(
+            event.reply_token,
+            [
+                TextSendMessage(text="📝 模擬考開始\n配分：是非 10 題×2 分、單選 10 題×2 分、多選 20 題×3 分\n總分 100 分\n輸入「結束模擬考」可中止。"),
+                build_mock_exam_question_message(exam_data),
+            ],
+        )
+        return
+
+    exam_data = get_mock_exam_session(user_id)
+    if exam_data:
+        if handle_mock_exam_message(event, user_id, msg, exam_data):
+            return
 
     if msg.upper() in ["開始", "START", "開始測驗", "RESET", "重設", "重新開始"]:
         selected_group = get_user_selected_group(user_id)
